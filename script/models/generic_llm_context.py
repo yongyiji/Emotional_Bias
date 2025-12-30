@@ -8,8 +8,7 @@ from tqdm import tqdm
 
 
 DATASET_FEW_SHOTS = {
-    # === HumanEval 3-Shot ===
-    # 特点：Input 是 "Function Header + Docstring", Output 是 "Function Body"
+
     "humaneval": [
         {
             "role": "user",
@@ -37,8 +36,6 @@ DATASET_FEW_SHOTS = {
         }
     ],
 
-    # === HumanEval+ 3-Shot ===
-    # 通常可以用 HumanEval 的，或者稍微加强一点的例子
     "humaneval+": [
         {
             "role": "user",
@@ -66,8 +63,6 @@ DATASET_FEW_SHOTS = {
         }
     ],
 
-    # === MBPP 3-Shot ===
-    # 特点：Input 是自然语言指令，Output 是完整函数
     "mbpp": [
         {
             "role": "user",
@@ -95,7 +90,6 @@ DATASET_FEW_SHOTS = {
         }
     ],
 
-    # === MBPP+ 3-Shot ===
     "mbpp+": [
         {
             "role": "user",
@@ -137,19 +131,14 @@ class GenericLLM(BaseModel):
             torch_dtype=torch.float16,
             trust_remote_code=True
         )
-        
-        # 保存 trigger 供 generate 使用
+
         self.sentiment_trigger = sentiment_trigger
         
-        # 初始化情绪上下文变量
         self.context_instruction = None
         self.context_response = None
 
-        # 基础 System Prompt
         base_system = "You are a developer. You need to answer the following coding problem and output only the code."
 
-        # === 加载包含对话历史的 JSON ===
-        # json_path = "/home/y/yj171/Sentiment_bias/sentiment_conversation_prompt/developer_emotions_context.json"
 
         if sentiment_trigger:
             if json_path and os.path.exists(json_path):
@@ -162,21 +151,21 @@ class GenericLLM(BaseModel):
                         if item.get("trigger") == sentiment_trigger:
                             self.context_instruction = item.get("context_instruction")
                             self.context_response = item.get("context_response")
-                            print(f"✅ Loaded emotional context for trigger: '{sentiment_trigger}'")
+                            print(f"Loaded emotional context for trigger: '{sentiment_trigger}'")
                             found = True
                             break
                     
                     if not found:
-                        print(f"⚠️ Trigger '{sentiment_trigger}' not found in JSON.")
+                        print(f"Trigger '{sentiment_trigger}' not found in JSON.")
                 except Exception as e:
-                    print(f"❌ Error loading JSON: {e}.")
+                    print(f"Error loading JSON: {e}.")
             else:
-                print(f"❌ JSON file not found at {json_path}.")
+                print(f"JSON file not found at {json_path}.")
 
         self.system_prompt = base_system
-        print(f"📋 System Prompt: {self.system_prompt}") 
+        print(f"System Prompt: {self.system_prompt}") 
         if self.context_instruction:
-            print(f"📚 Context Loaded: Will inject emotional history.")
+            print(f"Context Loaded: Will inject emotional history.")
 
     def generate(self, prompts, n_samples=1, max_new_tokens=512, is_mbpp=False, use_cot=False, use_fewshot=False, dataset_name=None):
         all_outputs = []
@@ -187,7 +176,6 @@ class GenericLLM(BaseModel):
         except Exception:
             model_name_lower = ""
 
-        # 判断是否为 StarCoder
         is_starcoder = "starcoder" in model_name_lower
         disable_system_role = (
             "starcoder" in model_name_lower or 
@@ -201,15 +189,13 @@ class GenericLLM(BaseModel):
         selected_few_shots = []
         if use_fewshot and dataset_name in DATASET_FEW_SHOTS:
             selected_few_shots = DATASET_FEW_SHOTS[dataset_name]
-            # print(f"🔎 Using 3-shot examples for dataset: {dataset_name}")
+            # print(f"Using 3-shot examples for dataset: {dataset_name}")
         elif use_fewshot:
-            # 用户开了 fewshot 但是数据集名字不对，这里选择不加载 default，直接打印警告
-            print(f"⚠️ Warning: Few-shot requested but no examples found for '{dataset_name}'. Proceeding with 0-shot.")
+            print(f"Warning: Few-shot requested but no examples found for '{dataset_name}'. Proceeding with 0-shot.")
             selected_few_shots = []
 
         for prompt in prompts:
             if use_cot:
-                # 将 CoT 咒语直接拼接到原始题目后面
                 prompt = prompt + "\n\nPlease think step by step and then provide the code."
 
 
@@ -219,31 +205,21 @@ class GenericLLM(BaseModel):
             
             # === 构造 Chat Messages ===
             messages = []
-            
-            # (A) System Prompt 逻辑控制
-            # 只有当不是 StarCoder 时，才添加 System Role
-            # StarCoder 直接跳过这一步 (即放弃 System Prompt)
+        
             if self.system_prompt and not disable_system_role:
                 messages.append({"role": "system", "content": self.system_prompt})
             
-            # (B) [修改] 注入 Few-Shot Examples
-            # 只有当 selected_few_shots 非空时才注入
             if selected_few_shots:
                 messages.extend(selected_few_shots)
 
-
-            # (B) 注入情绪历史 (Fake History)
             if self.context_instruction and self.context_response:
                 messages.append({"role": "user", "content": self.context_instruction})
                 messages.append({"role": "assistant", "content": self.context_response})
             
-            # (C) 当前用户的真实提问 (代码题)
             messages.append({"role": "user", "content": prompt})
 
-            # --- 分支处理：CodeLlama vs 普通 Chat Template ---
             
             if is_codellama_instruct:
-                # CodeLlama 逻辑保持不变 (手动拼接)
                 sys_str = f"<<SYS>>\n{self.system_prompt}\n<</SYS>>\n\n" if self.system_prompt else ""
                 
                 if self.context_instruction and self.context_response:
@@ -256,7 +232,6 @@ class GenericLLM(BaseModel):
                     input_text = f"<s>[INST] {sys_str}{prompt} [/INST]"
                     
             elif self.tokenizer.chat_template:
-                # 使用 chat_template 处理 messages
                 try:
                     input_text = self.tokenizer.apply_chat_template(
                         messages, 
@@ -265,16 +240,16 @@ class GenericLLM(BaseModel):
                     )
                 except Exception as e:
                     print(f"Template apply failed: {e}, falling back.")
-                    # 极端兜底：如果还报错，只发 Prompt
+
                     input_text = prompt
-            # >>>>>>>> 在这里添加打印代码 <<<<<<<<
+
             # print("\n" + "="*20 + " DEBUG: PROMPT CHECK " + "="*20)
             # print(f"【Current Model】: {self.model.config._name_or_path}")
             # print(f"【Emotional Trigger】: {self.sentiment_trigger}")
             # print("-" * 10 + " Full Input Text " + "-" * 10)
-            # print(input_text)  # <--- 核心：打印最终喂给模型的文本
+            # print(input_text) 
             # print("="*60 + "\n")
-            # >>>>>>>> 添加结束 <<<<<<<<
+
 
             inputs = self.tokenizer(input_text, return_tensors="pt").to(self.model.device)
             input_len = len(inputs.input_ids[0])
@@ -312,7 +287,7 @@ class GenericLLM(BaseModel):
                             prompt_outputs.append(code.strip())
 
                     except Exception as e:
-                        print(f"❌ Error during generation batch: {e}")
+                        print(f"Error during generation batch: {e}")
                         prompt_outputs.extend([""] * current_batch_size)
                     
                     samples_generated_so_far += current_batch_size
